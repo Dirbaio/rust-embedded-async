@@ -1,0 +1,22 @@
+[package]
+authors = ["Dario Nieuwenhuis <dirbaio@dirbaio.net>"]
+edition = "2021"
+name = "embassy-nrf-examples"
+version = "0.1.0"
+
+[dependencies]
+# ARM Cortex-M support
+cortex-m = "0.7.3"
+cortex-m-rt = "0.7.0"
+
+# NRF52840 Peripheral Access Crate, to do register reads/writes.
+nrf52840-pac = { version = "0.11", features = ["rt"] }
+
+# defmt, for logging.
+defmt = "0.3"
+defmt-rtt = "0.3"
+panic-probe = { version = "0.3", features = ["print-defmt"] }
+
+# Embassy
+embassy = { git = "https://github.com/embassy-rs/embassy", features = ["nightly", "defmt"]}
+embassy-nrf = { git = "https://github.com/embassy-rs/embassy", features = ["nightly", "defmt", "nrf52840", "time-driver-rtc1"]}

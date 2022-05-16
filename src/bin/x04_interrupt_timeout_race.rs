@@ -1,0 +1,100 @@
+#![no_std]
+#![no_main]
+
+use defmt::*;
+use defmt_rtt as _; // global logger
+use panic_probe as _; // panic handler
+
+use core::sync::atomic::{AtomicBool, Ordering};
+use nrf52840_pac::interrupt;
+
+const RX_PIN: usize = 8;
+const TX_PIN: usize = 6;
+
+static mut BUF: [u8; 8] = [0; 8];
+
+#[cortex_m_rt::entry]
+fn main() -> ! {
+    info!("Hello World!");
+
+    let p = nrf52840_pac::Peripherals::take().unwrap();
+
+    // Configure RX pin
+    p.P0.pin_cnf[RX_PIN].write(|w| w.input().connect());
+    p.UARTE0.psel.rxd.write(|w| unsafe { w.bits(RX_PIN as _) });
+
+    // Configure TX pin
+    p.P0.outset.write(|w| unsafe { w.bits(1 << TX_PIN) });
+    p.P0.pin_cnf[TX_PIN].write(|w| w.dir().output());
+    p.UARTE0.psel.txd.write(|w| unsafe { w.bits(TX_PIN as _) });
+
+    // Configure baud rate
+    p.UARTE0.baudrate.write(|w| w.baudrate().baud115200());
+
+    // Enable
+    p.UARTE0.enable.write(|w| w.enable().enabled());
+
+    // Configure buffer for reading
+    p.UARTE0.rxd.ptr.write(|w| unsafe { w.bits(BUF.as_mut_ptr() as _) });
+    p.UARTE0.rxd.maxcnt.write(|w| unsafe { w.bits(BUF.len() as _) });
+
+    // Enable interrupt
+    p.UARTE0.intenset.write(|w| w.endrx().set_bit());
+    unsafe { cortex_m::peripheral::NVIC::unmask(nrf52840_pac::Interrupt::UARTE0_UART0) };
+
+    // Start read
+    info!("Reading...");
+    p.UARTE0.tasks_startrx.write(|w| w.tasks_startrx().set_bit());
+
+    // Start timer for 1s.
+    p.TIMER0.mode.write(|w| w.mode().timer());
+    p.TIMER0.bitmode.write(|w| w.bitmode()._32bit());
+    p.TIMER0.cc[0].write(|w| unsafe { w.bits(1_000_000) }); // 1 second
+    p.TIMER0.tasks_start.write(|w| w.tasks_start().set_bit());
+    p.TIMER0.intenset.write(|w| w.compare0().set_bit());
+    unsafe { cortex_m::peripheral::NVIC::unmask(nrf52840_pac::Interrupt::TIMER0) };
+
+    // Nothing left to do in main, the interrupt will fire.
+    // Sleep in low-power mode.
+    loop {
+        cortex_m::asm::wfi();
+    }
+}
+
+static DONE: AtomicBool = AtomicBool::new(false);
+
+#[interrupt]
+fn UARTE0_UART0() {
+    let p = unsafe { nrf52840_pac::Peripherals::steal() };
+
+    if p.UARTE0.events_endrx.read().events_endrx().bit() {
+        p.UARTE0.events_endrx.reset();
+
+        if !DONE.swap(true, Ordering::SeqCst) {
+            // Stop the timer
+            p.TIMER0.tasks_stop.write(|w| w.tasks_stop().set_bit());
+
+            info!("Read done, got {:02x}", unsafe { BUF });
+
+            // Continue with the next step of the logic
+        }
+    }
+}
+
+#[interrupt]
+fn TIMER0() {
+    let p = unsafe { nrf52840_pac::Peripherals::steal() };
+
+    if p.TIMER0.events_compare[0].read().events_compare().bit() {
+        p.TIMER0.events_compare[0].reset();
+
+        if !DONE.swap(true, Ordering::SeqCst) {
+            // Stop the UART read.
+            p.UARTE0.tasks_stoprx.write(|w| w.tasks_stoprx().set_bit());
+
+            info!("Timeout!");
+
+            // Continue with the next step of the logic
+        }
+    }
+}
